@@ -29,7 +29,7 @@ module RakefileHelpers
     #path = Dir.glob("#{$cfg['compiler']['unit_tests_path']}**/*_tester#{C_EXTENSION}".gsub!(/\\/, '/'))#.join(' ')
     #\print "DISCOVERED TESTFILES:\n" + path + "\n\n"
     #path.gsub!(/\\/, '/')
-    FileList.new("#{$cfg['compiler']['unit_tests_path']}**/*_tester#{C_EXTENSION}") # <<<================================================================================================ HIER
+    FileList.new("#{$cfg['compiler']['unit_tests_path']}**/test_*#{C_EXTENSION}") # #<<<================================================================================================ HIER
   end
 
   def get_local_include_dirs

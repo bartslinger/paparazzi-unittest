@@ -26,7 +26,7 @@ compiler:
   includes:
     prefix: '-I'
     items:
-INCLUDE_ITEMS
+      - /home/bart/paparazzi/sw/airborne
   defines:
     prefix: '-D'
     items:
