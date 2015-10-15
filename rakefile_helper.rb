@@ -32,6 +32,10 @@ module RakefileHelpers
     FileList.new("#{$cfg['compiler']['unit_tests_path']}**/*_tester#{C_EXTENSION}") #<<<========== HIER
   end
 
+  def match_unit_test_files(match)
+    FileList.new("#{$cfg['compiler']['unit_tests_path']}**/#{match}_tester#{C_EXTENSION}")
+  end
+
   def get_local_include_dirs
     include_dirs = $cfg['compiler']['includes']['items'].dup
     include_dirs.delete_if {|dir| dir.is_a?(Array)}

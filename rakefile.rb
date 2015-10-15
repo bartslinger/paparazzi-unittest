@@ -15,6 +15,12 @@ task :unit do
   run_tests(get_unit_test_files)
 end
 
+task :test, [:match] do |t, args|
+  match = args.match
+  print match
+  run_tests(match_unit_test_files("#{match}"))
+end
+
 desc "Generate test summary"
 task :summary do
   report_summary
