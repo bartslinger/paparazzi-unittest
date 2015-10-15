@@ -25,8 +25,8 @@ int32_t actuators_pwm_values[ACTUATORS_PWM_NB];
 /* Actually defined in pprz_transport.c */
 struct pprz_transport pprz_tp;
 
-/* Actually defined in sd_logger.c */
-struct SdLogger sdlogger;
+/* Actually defined in sdlogger_spi_direct.c */
+struct SDLoggerSpiDirect sdlogger;
 
 
 void setUp(void)
