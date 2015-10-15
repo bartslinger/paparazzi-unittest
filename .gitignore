@@ -4,3 +4,8 @@ build/*
 *.includes
 *.yml
 Mock*
+
+# QtCreator files
+*.creator
+*.creator.user
+*.files
