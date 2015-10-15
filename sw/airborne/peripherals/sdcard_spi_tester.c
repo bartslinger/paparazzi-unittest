@@ -44,6 +44,9 @@ struct spi_periph spi2;
 /* Declared in sdcard_spi.c during normal operation */
 struct SDCard sdcard1;
 
+/* Private function in sdcard_spi.c */
+extern void sdcard_spi_spicallback(struct spi_transaction *t);
+
 /* Struct to revert to orginial state before each unit test */
 struct SDCard sdcard_original;
 

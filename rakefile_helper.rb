@@ -206,7 +206,7 @@ module RakefileHelpers
               # Mock created in mocks/, move to correct directory
               paparazzi_home = ENV['PAPARAZZI_HOME']
               mock_newdir    = original_directory.gsub(paparazzi_home + '/', '')
-              print mock_newdir
+
               # If file is a _testable.h, put mock in the same directory
               if header_filename.end_with?("testable.h")
                 mock_newdir = original_directory
