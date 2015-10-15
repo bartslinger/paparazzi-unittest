@@ -29,7 +29,7 @@ module RakefileHelpers
     #path = Dir.glob("#{$cfg['compiler']['unit_tests_path']}**/*_tester#{C_EXTENSION}".gsub!(/\\/, '/'))#.join(' ')
     #\print "DISCOVERED TESTFILES:\n" + path + "\n\n"
     #path.gsub!(/\\/, '/')
-    FileList.new("#{$cfg['compiler']['unit_tests_path']}**/test_*#{C_EXTENSION}") # #<<<================================================================================================ HIER
+    FileList.new("#{$cfg['compiler']['unit_tests_path']}**/*_tester#{C_EXTENSION}") #<<<========== HIER
   end
 
   def get_local_include_dirs
@@ -190,7 +190,7 @@ module RakefileHelpers
 
         #create mocks if needed
         if (header =~ /Mock/)
-          require "../../sw/ext/cmock/lib/cmock.rb"
+          require "./cmock/lib/cmock.rb"
           @cmock ||= CMock.new($cfg_file)
           #find source path from all the includes
           $cfg['compiler']['includes']['items'].each do |dir|
@@ -200,12 +200,13 @@ module RakefileHelpers
               mock_filename = File.basename(header, '.h')
               header_filename = File.basename(potential_file)
 
-              #print "GEVONDEN: " + potential_file + "\n"
+              print "Found file: " + potential_file + "\n"
               @cmock.setup_mocks(potential_file) #dir+header.gsub('Mock','')
 
               # Mock created in mocks/, move to correct directory
-              paparazzi_home = File.expand_path(File.join(File.dirname(__FILE__), '../../'))
+              paparazzi_home = ENV['PAPARAZZI_HOME']
               mock_newdir    = original_directory.gsub(paparazzi_home + '/', '')
+              print mock_newdir
               # If file is a _testable.h, put mock in the same directory
               if header_filename.end_with?("testable.h")
                 mock_newdir = original_directory

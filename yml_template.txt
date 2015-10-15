@@ -1,7 +1,7 @@
 compiler:
   path: gcc
   source_path:     '/home/bart/paparazzi/sw/airborne/'
-  unit_tests_path: &unit_tests_path '/home/bart/paparazzi/tests/unittest/'
+  unit_tests_path: &unit_tests_path '/home/bart/paparazzi-unittest/'
   build_path:      &build_path 'build/'
   options:
     - -c
