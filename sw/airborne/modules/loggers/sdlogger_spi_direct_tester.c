@@ -8,7 +8,8 @@
 #define S_(x) S(x)
 #define S__LINE__ "Line: " S_(__LINE__)
 
-/* Usage example of the SD Logger:
+/**
+ * Usage example of the SD Logger:
  * pprz_msg_send_ALIVE(&pprzlog_tp.trans_tx, &sdlogger_spi.device, AC_ID, value);
  *
  * Implementation requirements:
@@ -31,22 +32,50 @@
 //struct pprzlog_transport pprzlog_tp;
 
 /* Actually defined in sdlogger_spi_direct.c */
-struct sdlogger_spi_periph sdlogger;
+//struct sdlogger_spi_periph sdlogger_spi;
 
+/* Struct to save original state to revert to before each test */
+struct sdlogger_spi_periph sdlogger_spi_original;
 
 void setUp(void)
 {
+  /* Remember initial state */
+  sdlogger_spi_original = sdlogger_spi;
+
   /* Set incorrect values to ensure proper initialization */
+  //--
 
   Mocksdcard_spi_Init();
 }
 
 void tearDown(void)
 {
+  /* Revert back to original state */
+  sdlogger_spi = sdlogger_spi_original;
+
   Mocksdcard_spi_Verify();
   Mocksdcard_spi_Destroy();
 }
 
+/**
+ * @brief testInitializeLoggerStruct
+ *
+ * The device interface functions should be initialized to functions that are
+ * defined by the SD Logger.
+ * First argument of each function is a pointer to the peripheral
+ */
 void testInitializeLoggerStruct(void) {
-  TEST_ASSERT_EQUAL(TRUE, FALSE);
+  sdlogger_spi_direct_init();
+  TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.check_free_space,
+                        &sdlogger_spi_direct_check_free_space);
+  TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.put_byte,
+                        &sdlogger_spi_direct_put_byte);
+  TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.send_message,
+                        &sdlogger_spi_direct_send_message);
+  TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.char_available,
+                        &sdlogger_spi_direct_char_available);
+  TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.get_byte,
+                        &sdlogger_spi_direct_get_byte);
+  TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.periph,
+                        &sdlogger_spi);
 }
