@@ -17,4 +17,4 @@ $ git clone https://github.com/bartslinger/paparazzi-tools.git
 ```
 $ python ~/paparazzi-tools/qtcreator_ide_config/configure_workspace.py <AC_NAME> ~/paparazzi-unittest/yml_template.txt
 ```
-<AC_NAME> = Aircraft name as defined in conf.xml, for example "Microjet" (without quotes)
+\<AC_NAME\> = Aircraft name as defined in conf.xml, for example "Microjet" (without quotes)
