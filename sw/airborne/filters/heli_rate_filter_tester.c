@@ -28,7 +28,10 @@ void setUp(void) {
   heli_roll_filter.omega = 123;
   heli_roll_filter.delay = 123;
   heli_roll_filter.alpha = 123;
-  heli_roll_filter.previous = 123;
+  for (uint8_t i=0; i<HELI_RATE_FILTER_BUFFER_SIZE;i++) {
+    heli_roll_filter.buffer[i] = 123+i;
+  }
+  heli_roll_filter.idx = 123;
 }
 
 void tearDown(void) {
@@ -114,6 +117,37 @@ void testStepResponseScenario3(void){
   uint32_t omega = 20;
   uint8_t delay = 2;
   heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  /* Propagate */
+  int32_t response;
+  int32_t input = MAX_PPRZ;
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(0, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(0, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(360, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(707, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1041, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1362, response);
+}
+
+/**
+ * @brief testStepResponseBufferOverflow
+ * Same as before, but with different buffer index to see if it correctly jumps
+ * back to the start of the buffer after max index is reached.
+ */
+void testStepResponseBufferOverflow(void){
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = 2;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  /* Manipulate buffer index */
+  heli_roll_filter.idx = 18;
 
   /* Propagate */
   int32_t response;
