@@ -50,7 +50,7 @@ void testInitializeFilterWithOmegaAndDelay(void) {
 }
 
 /**
- * @brief testThatFails
+ * @brief testStepResponseScenario1
  * Scenario: Delay = 0
  * omega_c = 20 (rad/s)
  * y[n] = alpha*y[n-1] + (1-alpha) u[n]
@@ -58,6 +58,7 @@ void testInitializeFilterWithOmegaAndDelay(void) {
  * Ts = 1/512, omega_c = 20, then alpha = 0.962406015
  *
  * First response is only (1-alpha)*9600, which is 360,9
+ * Values used for comparison originate from matlab
  */
 void testStepResponseScenario1(void) {
   /* Configure filter */
@@ -68,6 +69,59 @@ void testStepResponseScenario1(void) {
   /* Propagate */
   int32_t response;
   int32_t input = MAX_PPRZ;
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(360, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(707, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1041, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1362, response);
+}
+
+/**
+ * @brief testStepResponseScenario2
+ * Same as scenario1, but different omega.
+ * Values originate from matlab script.
+ */
+void testStepResponseScenario2(void) {
+  /* Configure filter */
+  uint32_t omega = 60;
+  uint8_t delay = 0;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  /* Propagate */
+  int32_t response;
+  int32_t input = MAX_PPRZ;
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1007, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1908, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(2715, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(3437, response);
+}
+
+/**
+ * @brief testStepResponseScenario3
+ * Scenario WITH delay, 2 steps
+ * Therefore, first two responses are zero.
+ * Rest is the same as before.
+ */
+void testStepResponseScenario3(void){
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = 2;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  /* Propagate */
+  int32_t response;
+  int32_t input = MAX_PPRZ;
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(0, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(0, response);
   response = heli_rate_filter_propagate(&heli_roll_filter, input);
   TEST_ASSERT_EQUAL(360, response);
   response = heli_rate_filter_propagate(&heli_roll_filter, input);
