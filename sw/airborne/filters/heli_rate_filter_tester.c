@@ -147,7 +147,7 @@ void testStepResponseBufferOverflow(void){
   heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
 
   /* Manipulate buffer index */
-  heli_roll_filter.idx = 18;
+  heli_roll_filter.idx = HELI_RATE_FILTER_BUFFER_SIZE - 2;
 
   /* Propagate */
   int32_t response;
@@ -164,4 +164,115 @@ void testStepResponseBufferOverflow(void){
   TEST_ASSERT_EQUAL(1041, response);
   response = heli_rate_filter_propagate(&heli_roll_filter, input);
   TEST_ASSERT_EQUAL(1362, response);
+}
+
+/**
+ * @brief testMaximumDelayFirst
+ * It should not be possible to set the delay to a value larger than the buffer
+ * size. If this is attempted, it should be rounded off towards the buffer size
+ * minus one.
+ */
+void testMaximumDelayFirst(void)
+{
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = HELI_RATE_FILTER_BUFFER_SIZE;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  TEST_ASSERT_EQUAL(HELI_RATE_FILTER_BUFFER_SIZE-1, heli_roll_filter.delay);
+}
+
+/**
+ * @brief testMaximumDelayFar
+ * Requested delay exceeds buffer size by far, is rounded towards buffer size
+ * minus one.
+ */
+void testMaximumDelayFar(void)
+{
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = HELI_RATE_FILTER_BUFFER_SIZE + 5;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  TEST_ASSERT_EQUAL(HELI_RATE_FILTER_BUFFER_SIZE-1, heli_roll_filter.delay);
+}
+
+/**
+ * @brief testChangeOmegaValue
+ * During runtime, the value for omega can be changed using a function.
+ * We initialize with 20, then change it to 60 to see the response.
+ */
+void testChangeOmegaValue(void)
+{
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = 0;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  /* Propagate with no input */
+  int32_t response;
+  response = heli_rate_filter_propagate(&heli_roll_filter, 0);
+
+  /* Change omega to 60 rad/s */
+  heli_rate_filter_set_omega(&heli_roll_filter, 60);
+
+  /* Propagate */
+  int32_t input = MAX_PPRZ;
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1007, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1908, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(2715, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(3437, response);
+}
+
+/**
+ * @brief testChangeDelayWithinRange
+ * Run-time change of delay.
+ */
+void testChangeDelayWithinRange(void)
+{
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = 0;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  /* Propagate */
+  int32_t response;
+  int32_t input = MAX_PPRZ;
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(360, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(707, response);
+
+  /* Change delay from 0 to 2 */
+  heli_rate_filter_set_delay(&heli_roll_filter, 2);
+  /* Propagate, values are repeated */
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(360, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(707, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1041, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1362, response);
+}
+
+/**
+ * @brief testChangeDelayOutsideBufferRange
+ * Change delay during run-time. New delay value is bigger than buffer size. In
+ * this case, set delay to buffersize - 1
+ */
+void testChangeDelayOutsideBufferRange(void)
+{
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = 0;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+
+  /* Set delay to number that is 1 too large */
+  heli_rate_filter_set_delay(&heli_roll_filter, HELI_RATE_FILTER_BUFFER_SIZE);
+  TEST_ASSERT_EQUAL(HELI_RATE_FILTER_BUFFER_SIZE-1, heli_roll_filter.delay);
 }
