@@ -111,6 +111,8 @@ void setUp(void)
   }
   sdcard1.status = SDCard_Error;
 
+  radio_control.values[SDLOGGER_CONTROL_SWITCH] = 0;
+
   Mocksdcard_spi_Init();
 }
 
@@ -437,6 +439,8 @@ void testCheckFreeSpaceLoggingAndAvailable(void)
   helperInitializeLogger();
   /* Accepting messages */
   sdlogger_spi.status = SDLogger_Logging;
+  sdlogger_spi.sdcard_buf_idx = 1;
+  sdlogger_spi.idx = 0;
 
   /* Function call (from messages.h) */
   bool_t available = sdlogger_spi_direct_check_free_space(
@@ -445,6 +449,72 @@ void testCheckFreeSpaceLoggingAndAvailable(void)
 
   /* There is space available for writing */
   TEST_ASSERT_TRUE(available);
+}
+
+void testCheckFreeSpaceRequestJustTheAvailableBytes(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Logging;
+  /* SDCard buffer full, logger buffer almost full */
+  sdlogger_spi.sdcard_buf_idx = 513;
+  sdlogger_spi.idx = SDLOGGER_BUFFER_SIZE - 4;
+
+  /* Requesting free space */
+  bool_t available = sdlogger_spi_direct_check_free_space(
+                       sdlogger_spi.device.periph,
+                       4);
+  /* There is (just) enough space */
+  TEST_ASSERT_TRUE(available);
+}
+
+void testCheckFreeSpaceRequestOneTooManyBytes(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Logging;
+  /* SDCard buffer full, logger buffer almost full */
+  sdlogger_spi.sdcard_buf_idx = 513;
+  sdlogger_spi.idx = SDLOGGER_BUFFER_SIZE - 4;
+
+  /* Requesting free space */
+  bool_t available = sdlogger_spi_direct_check_free_space(
+                       sdlogger_spi.device.periph,
+                       5);
+  /* There is (just) not enough space */
+  TEST_ASSERT_FALSE(available);
+}
+
+void testCheckFreeSpaceBothBuffersPossible(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Logging;
+  sdlogger_spi.sdcard_buf_idx = 510;
+  sdlogger_spi.idx = 0;
+
+  /* Requesting free space */
+  bool_t available = sdlogger_spi_direct_check_free_space(
+                       sdlogger_spi.device.periph,
+                       67);
+  /* There is (just) enough space */
+  TEST_ASSERT_TRUE(available);
+}
+
+void testCheckFreeSpaceBothBuffersJustNotPossible(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Logging;
+  sdlogger_spi.sdcard_buf_idx = 510;
+  sdlogger_spi.idx = 0;
+
+  /* Requesting free space */
+  bool_t available = sdlogger_spi_direct_check_free_space(
+                       sdlogger_spi.device.periph,
+                       68);
+  /* There is (just) not enough space */
+  TEST_ASSERT_FALSE(available);
 }
 
 /**
@@ -547,6 +617,7 @@ void testPeriodicIfSDCardIsReadyAndSDBufferIsFull(void)
   /* Preconditions */
   helperInitializeLogger();
   sdlogger_spi.status = SDLogger_Logging;
+  radio_control.values[SDLOGGER_CONTROL_SWITCH] = 500;
   /* Buffer is full */
   sdlogger_spi.sdcard_buf_idx = 513;
   sdcard1.status = SDCard_MultiWriteBusy;
@@ -631,9 +702,133 @@ void testStopLogging(void)
 
   /* Expectations */
   sdcard_spi_periodic_Expect(&sdcard1);
-  sdcard_spi_multiwrite_next_Expect(&sdcard1, NULL); TEST_IGNORE();
 
   /* Check in periodic loop */
   sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL(SDLogger_LoggingFinalBlock, sdlogger_spi.status);
 }
 
+void testLoggingFinalBlockWithFullBuffersCardBusy(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_LoggingFinalBlock;
+  sdcard1.status = SDCard_MultiWriteBusy;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  /* Status unchanged */
+  TEST_ASSERT_EQUAL(SDLogger_LoggingFinalBlock, sdlogger_spi.status);
+}
+
+void testLoggingFinalBlockWithFullBuffersCardAvailable(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_LoggingFinalBlock;
+  sdcard1.status = SDCard_MultiWriteIdle;
+  /* Still a lot of data in the buffers */
+  sdlogger_spi.idx = 20;
+  sdlogger_spi.sdcard_buf_idx = 513;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_multiwrite_next_Expect(&sdcard1,
+                                    &sdlogger_spi_direct_multiwrite_written);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+}
+
+/**
+ * @brief testLoggingFinalBlockWithHalfFullBufferCardAvailalble
+ * If there is some data in the buffer and card is idle, then fill the rest
+ * with trailing zero's and submit.
+ */
+void testLoggingFinalBlockWithHalfFullBufferCardAvailalble(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_LoggingFinalBlock;
+  sdcard1.status = SDCard_MultiWriteIdle;
+  /* Some data in buffer */
+  sdlogger_spi.idx = 0;
+  sdlogger_spi.sdcard_buf_idx = 30;
+  /* Until this value should not be overwritten with zero's */
+  sdcard1.output_buf[29] = 0xEE;
+  /* Set wrong values here, should be converted to trailing zero's */
+  sdcard1.output_buf[30] = 0xB0;
+  sdcard1.output_buf[31] = 0xAA;
+  sdcard1.output_buf[512] = 0xDD;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_multiwrite_next_Expect(&sdcard1, &sdlogger_spi_direct_multiwrite_written);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL_HEX(0xEE, sdcard1.output_buf[29]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[30]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[31]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[512]);
+}
+
+/**
+ * @brief testLoggingFinalBlockBuffersEmpty
+ * When all buffers are empty in the LogginFinalBlock state, it is time to call
+ * the multiwrite_stop function.
+ */
+void testLoggingFinalBlockBuffersEmpty(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.sdcard_buf_idx = 1;
+  sdlogger_spi.idx = 0;
+  sdlogger_spi.status = SDLogger_LoggingFinalBlock;
+  sdcard1.status = SDCard_MultiWriteIdle;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_multiwrite_stop_Expect(&sdcard1);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL(SDLogger_StoppedLogging, sdlogger_spi.status);
+}
+
+void testWaitWhileReadyWithStoppingMultiWrite(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_StoppedLogging;
+  sdcard1.status = SDCard_Busy;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL(SDLogger_StoppedLogging, sdlogger_spi.status);
+}
+
+/**
+ * @brief testReadyFinishingMultiWriteThenRequestIndexPage
+ * As soon as the entire log is successfully written after a stop command, the
+ * information on this new log needs to be put in the index. Therefore, the
+ * index is downloaded first.
+ */
+void testReadyFinishingMultiWriteThenRequestIndexPage(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_StoppedLogging;
+  sdcard1.status = SDCard_Idle;
+}
