@@ -94,11 +94,11 @@ void setUp(void)
 #endif
 
   /* Set incorrect values to ensure proper initialization */
+  sdlogger_spi.status = SDLogger_Error;
   sdlogger_spi.next_available_address = 123;
   sdlogger_spi.last_completed = 123;
-  sdlogger_spi.accepting_messages = TRUE;
   sdlogger_spi.sdcard_buf_idx = 123;
-  sdlogger_spi.switch_state = TRUE;
+  sdlogger_spi.idx = 123;
 
   /* Set incorrect values to sdcard buffers */
   for (uint16_t i = 0; i < SD_BLOCK_SIZE + 10; i++) {
@@ -109,6 +109,7 @@ void setUp(void)
   for (uint8_t i = 0; i < sizeof(sdlogger_spi.buffer); i++) {
     sdlogger_spi.buffer[i] = 123;
   }
+  sdcard1.status = SDCard_Error;
 
   Mocksdcard_spi_Init();
 }
@@ -165,15 +166,15 @@ void testInitializeLoggerStruct(void)
   helperInitializeLogger();
 
   /* Values in the struct should be set to their defaults */
+  TEST_ASSERT_EQUAL(SDLogger_Initializing, sdlogger_spi.status);
   TEST_ASSERT_EQUAL(0x00000000, sdlogger_spi.next_available_address);
   TEST_ASSERT_EQUAL(0, sdlogger_spi.last_completed);
-  TEST_ASSERT_FALSE(sdlogger_spi.accepting_messages);
   /* Initialize SD Card buffer at 1 because byte 0 is reserved for start flag */
   TEST_ASSERT_EQUAL(1, sdlogger_spi.sdcard_buf_idx);
-  TEST_ASSERT_FALSE(sdlogger_spi.switch_state);
   for (uint8_t i = 0; i < sizeof(sdlogger_spi.buffer); i++) {
     TEST_ASSERT_EQUAL(0, sdlogger_spi.buffer[i]);
   }
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.idx);
   /*  Link device function references: */
   TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.check_free_space,
                         &sdlogger_spi_direct_check_free_space);
@@ -190,6 +191,26 @@ void testInitializeLoggerStruct(void)
 }
 
 /**
+ * @brief testDoNothingWhileInitializing
+ * Wait for the SD Card to become idle.
+ */
+void testDoNothingWhileInitializing(void)
+{
+  /* Preconditions */
+  sdlogger_spi.status = SDLogger_Initializing;
+  sdcard1.status = SDCard_Busy;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  /* Call no other functions */
+
+  sdlogger_spi_direct_periodic();
+
+  /* Still initializing state */
+  TEST_ASSERT_EQUAL(SDLogger_Initializing, sdlogger_spi.status);
+}
+
+/**
  * @brief testReadIndexWhenSDCardGetsIdle
  * As soon as the periodic functions get called, the SD Card runs the
  * initialization sequence. When it is done with this, the logger should request
@@ -200,6 +221,7 @@ void testReadIndexWhenSDCardGetsIdle(void)
 {
   /* Preconditions */
   helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Initializing;
   sdcard1.status = SDCard_Idle;
 
   /* Expectations */
@@ -210,28 +232,25 @@ void testReadIndexWhenSDCardGetsIdle(void)
 
   /* Function call */
   sdlogger_spi_direct_periodic();
+
+  /* Status change */
+  TEST_ASSERT_EQUAL(SDLogger_RetreivingIndex, sdlogger_spi.status);
 }
 
-/**
- * @brief testReadIndexOnlyOnceOnStartup
- * We don't want to read the index every time the SD Card is idle. We can check
- * if it is done already by checking the next_available_address. This is zero by
- * default.
- */
-void testReadIndexOnlyOnceOnStartup(void)
+void testWaitWhileRetreivingIndex(void)
 {
-  /* Preconditions */
   helperInitializeLogger();
-  sdcard1.status = SDCard_Idle;
-  /* Not zero, so the index was read already: */
-  sdlogger_spi.next_available_address = 0x00004000;
+  sdlogger_spi.status = SDLogger_RetreivingIndex;
 
   /* Expectations */
   sdcard_spi_periodic_Expect(&sdcard1);
-  /* read_block is not called this time */
+  /* Expect no other calls */
 
   /* Periodic loop */
   sdlogger_spi_direct_periodic();
+
+  /* State unchanged */
+  TEST_ASSERT_EQUAL(SDLogger_RetreivingIndex, sdlogger_spi.status);
 }
 
 /**
@@ -243,6 +262,7 @@ void testReadIndexOnlyOnceOnStartup(void)
 void testSaveIndexInformationForLaterUse(void)
 {
   /* Preconditions */
+  sdlogger_spi.status = SDLogger_RetreivingIndex;
   /* SD Card buffer contains relevant values */
   /* Next available address: */
   helperAssignUint(&sdcard1.input_buf[0], 0x12345678);
@@ -255,6 +275,8 @@ void testSaveIndexInformationForLaterUse(void)
   /* Verify correct values set by function */
   TEST_ASSERT_EQUAL(0x12345678, sdlogger_spi.next_available_address);
   TEST_ASSERT_EQUAL(12, sdlogger_spi.last_completed);
+  /* State change */
+  TEST_ASSERT_EQUAL(SDLogger_Ready, sdlogger_spi.status);
 }
 
 /**
@@ -267,9 +289,10 @@ void testStartLoggingWhenSwitchIsFlipped(void)
 {
   /* Preconditions */
   helperInitializeLogger();
-  /* Index already available: */
+  sdcard1.status = SDCard_Idle;
+  /* Logger is ready as well: */
+  sdlogger_spi.status = SDLogger_Ready;
   sdlogger_spi.next_available_address = 0x00004000;
-  sdlogger_spi.accepting_messages = FALSE;
   /* Switch is now state OFF: */
   radio_control.values[SDLOGGER_CONTROL_SWITCH] = -500;
 
@@ -290,7 +313,7 @@ void testStartLoggingWhenSwitchIsFlipped(void)
   sdlogger_spi_direct_periodic();
 
   /* Logger is accepting messages */
-  TEST_ASSERT_TRUE(sdlogger_spi.accepting_messages);
+  TEST_ASSERT_EQUAL(SDLogger_Logging, sdlogger_spi.status);
   /* LED is on */
 #ifdef LOGGER_LED
   TEST_ASSERT_TRUE(LED_STATUS(LOGGER_LED));
@@ -300,9 +323,10 @@ void testStartLoggingWhenSwitchIsFlipped(void)
 void testOnlyStartMultiwriteOnceWhenSwitchIsFlipped(void) {
   /* Preconditions */
   helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Ready;
+  sdcard1.status = SDCard_Idle;
   /* Index already available: */
   sdlogger_spi.next_available_address = 0x00004000;
-  sdlogger_spi.accepting_messages = TRUE;
   /* Switch is now state ON: */
   radio_control.values[SDLOGGER_CONTROL_SWITCH] = 500;
 
@@ -313,40 +337,52 @@ void testOnlyStartMultiwriteOnceWhenSwitchIsFlipped(void) {
   /* First Periodic loop */
   sdlogger_spi_direct_periodic();
 
+  TEST_ASSERT_EQUAL(SDLogger_Logging, sdlogger_spi.status);
+
   /* Expections second run */
   sdcard_spi_periodic_Expect(&sdcard1);
   /* Do not expect multiwrite_start again */
 
   /* Second periodic loop */
   sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL(SDLogger_Logging, sdlogger_spi.status);
 }
 
 /**
- * @brief testDoNotStartLoggingIfIndexNotDownloaded
- * Only start accepting messages if the index frame has been downloaded. Then,
- * the next available address is also set correctly.
+ * @brief testDoNotStartMultiWriteIfSdCardIsNotIdle
+ * Only start logging if the SD Card is in idle state.
  */
-void testDoNotStartLoggingIfIndexNotDownloaded(void)
+void testDoNotStartMultiWriteIfSdCardIsNotIdle(void)
 {
   /* Preconditions */
   helperInitializeLogger();
-  /* Index not yet available: */
-  sdlogger_spi.next_available_address = 0x00000000;
-  sdlogger_spi.accepting_messages = FALSE;
-  /* Switch in state ON: */
+  sdlogger_spi.status = SDLogger_Ready;
+  sdcard1.status = SDCard_Busy;
+  sdlogger_spi.next_available_address = 0x00004000;
+  /* Switch is now state ON: */
   radio_control.values[SDLOGGER_CONTROL_SWITCH] = 500;
 
   /* Expectations */
   sdcard_spi_periodic_Expect(&sdcard1);
-  sdcard_spi_read_block_Expect(&sdcard1,
-                               0x00002000,
-                               &sdlogger_spi_direct_index_received);
+  /* Don't call multiwrite_start because card is busy */
 
-  /* Periodic loop */
+  /* First Periodic loop */
   sdlogger_spi_direct_periodic();
 
-  /* Logger is NOT accepting messages */
-  TEST_ASSERT_FALSE(sdlogger_spi.accepting_messages);
+  TEST_ASSERT_EQUAL(SDLogger_Ready, sdlogger_spi.status);
+
+  /* Card changes state to Idle */
+  sdcard1.status = SDCard_Idle;
+
+  /* Expectation: */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_multiwrite_start_Expect(&sdcard1, 0x00004000);
+
+  /* Second periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL(SDLogger_Logging, sdlogger_spi.status);
 }
 
 /**
@@ -358,8 +394,7 @@ void testDoNotLogIfSwitchIsDisabled(void)
   /* Preconditions */
   helperInitializeLogger();
   /* Index not yet available: */
-  sdlogger_spi.next_available_address = 0x00004000;
-  sdlogger_spi.accepting_messages = FALSE;
+  sdlogger_spi.status = SDLogger_Ready;
   /* Switch in state OFF: */
   radio_control.values[SDLOGGER_CONTROL_SWITCH] = -500;
 
@@ -369,21 +404,20 @@ void testDoNotLogIfSwitchIsDisabled(void)
   /* Periodic loop */
   sdlogger_spi_direct_periodic();
 
-  /* Logger is NOT accepting messages */
-  TEST_ASSERT_FALSE(sdlogger_spi.accepting_messages);
+  /* State remains unchanged */
+  TEST_ASSERT_EQUAL(SDLogger_Ready, sdlogger_spi.status);
 }
 
 /**
  * @brief testCheckFreeSpaceNotLogging
- * If not accepting messages, return FALSE to prevent further calls to write.
+ * If not logging, return FALSE to prevent further calls to write.
  */
 void testCheckFreeSpaceNotLogging(void)
 {
   /* Preconditions */
   helperInitializeLogger();
   /* Not accepting messages */
-  sdlogger_spi.accepting_messages = FALSE;
-
+  sdlogger_spi.status = SDLogger_Ready;
   /* Function call (from messages.h) */
   bool_t available = sdlogger_spi_direct_check_free_space(
                        sdlogger_spi.device.periph,
@@ -402,7 +436,7 @@ void testCheckFreeSpaceLoggingAndAvailable(void)
   /* Preconditions */
   helperInitializeLogger();
   /* Accepting messages */
-  sdlogger_spi.accepting_messages = TRUE;
+  sdlogger_spi.status = SDLogger_Logging;
 
   /* Function call (from messages.h) */
   bool_t available = sdlogger_spi_direct_check_free_space(
@@ -410,7 +444,7 @@ void testCheckFreeSpaceLoggingAndAvailable(void)
                        20);
 
   /* There is space available for writing */
-  TEST_ASSERT_TRUE(available)
+  TEST_ASSERT_TRUE(available);
 }
 
 /**
@@ -432,6 +466,7 @@ void testPutByteIntoSDBuffer(void)
 {
   /* Preconditions */
   helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Logging;
 
   /* Put byte call through messages.h and pprzlog_tp */
   sdlogger_spi_direct_put_byte(sdlogger_spi.device.periph, 0xAB);
@@ -455,29 +490,150 @@ void testSDBufferGetsFull(void)
 {
   /* Pre-conditions */
   helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Logging;
   /* Last element in the buffer: */
   sdlogger_spi.sdcard_buf_idx = 512;
+  sdcard1.status = SDCard_MultiWriteIdle;
 
   /* Expectations */
-  sdcard_spi_multiwrite_next_Expect(&sdcard1);
+  sdcard_spi_multiwrite_next_Expect(&sdcard1,
+                                    &sdlogger_spi_direct_multiwrite_written);
 
   /* Put byte call through messages.h and pprzlog_tp */
   sdlogger_spi_direct_put_byte(sdlogger_spi.device.periph, 0xAB);
 
   /* Values set in sd buffer, index reset */
   TEST_ASSERT_EQUAL(0xAB, sdcard1.output_buf[512]);
-  TEST_ASSERT_EQUAL(1, sdlogger_spi.sdcard_buf_idx);
 
   /* Write another byte after SD Card buffer is full */
   sdlogger_spi_direct_put_byte(sdlogger_spi.device.periph, 0xEF);
+  sdlogger_spi_direct_put_byte(sdlogger_spi.device.periph, 0x4F);
 
   /* It should end up in the loggers internal buffer to copy later */
   TEST_ASSERT_EQUAL(0xEF, sdlogger_spi.buffer[0]);
+  TEST_ASSERT_EQUAL(0x4F, sdlogger_spi.buffer[1]);
+}
 
+/**
+ * @brief testSDBufferGetsFullButCardIsNotReady
+ * If the SD Card buffer is full, it wants to write to the card. This can only
+ * be done if the SD Card is ready to accept a data block.
+ */
+void testSDBufferGetsFullButCardIsNotReady(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  /* Last element in the buffer: */
+  sdlogger_spi.sdcard_buf_idx = 512;
+  /* SD Card is busy with previous block */
+  sdcard1.status = SDCard_MultiWriteBusy;
+
+  /* Expectations */
+  /* SD Card busy, so don't call now */
+
+  /* Put byte call through messages.h and pprzlog_tp */
+  sdlogger_spi_direct_put_byte(sdlogger_spi.device.periph, 0xAB);
+  /* The SD Card output buffer is now FULL */
+}
+
+/**
+ * @brief testPeriodicIfSDCardIsReadyAndSDBufferIsFull
+ * If the SD Card buffer is not written immediately when it got full (because
+ * the card was still working on something else), check the sdcard status every
+ * periodic loop and write it when the card is back to idle
+ */
+void testPeriodicIfSDCardIsReadyAndSDBufferIsFull(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Logging;
+  /* Buffer is full */
+  sdlogger_spi.sdcard_buf_idx = 513;
+  sdcard1.status = SDCard_MultiWriteBusy;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+
+  /* Periodic loop #1 */
+  sdlogger_spi_direct_periodic();
+
+  /* SD Card status changed */
+  sdcard1.status = SDCard_MultiWriteIdle;
+
+  /* New expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_multiwrite_next_Expect(&sdcard1,
+                                    &sdlogger_spi_direct_multiwrite_written);
+
+  /* Periodic loop #2 */
+  sdlogger_spi_direct_periodic();
+}
+
+/**
+ * @brief testDoNotWriteIfLoggerBufferIsFull
+ * If correctly implemented, the internal buffer will never get full because
+ * proper implementation calls check_free_space. But if it is badly implemented,
+ * it can be desastrous to write outside the buffer, so lets check it just in
+ * case.
+ */
+void testDoNotWriteIfLoggerBufferIsFull(void)
+{
+  /* Pre-conditions */
+  helperInitializeLogger();
+  /* Last element in the buffer: */
+  sdlogger_spi.sdcard_buf_idx = 513;
+  sdlogger_spi.idx = SDLOGGER_BUFFER_SIZE - 1;
+
+  /* Put byte call through messages.h and pprzlog_tp */
+  sdlogger_spi_direct_put_byte(sdlogger_spi.device.periph, 0xAB);
+  sdlogger_spi_direct_put_byte(sdlogger_spi.device.periph, 0xCD);
+
+  TEST_ASSERT_EQUAL(0xAB, sdlogger_spi.buffer[SDLOGGER_BUFFER_SIZE-1]);
+  /* The index would get overwritten if not checking for end of buffer */
+  TEST_ASSERT_EQUAL(SDLOGGER_BUFFER_SIZE, sdlogger_spi.idx);
+}
+
+/**
+ * @brief testCopyLoggerBufferToSDCardWhenSpiTransactionFinished
+ * The callback is called when the SPI transaction is complete. The SD Card will
+ * still be in a busy state, but the output buffer can be used again for writing
+ * data to.
+ */
+void testCopyLoggerBufferToSDCardWhenSpiTransactionFinished(void)
+{
+  /* Pre-conditions */
+  helperInitializeLogger();
+  /* Some stuff in the SD Logger buffer */
+  sdlogger_spi.buffer[0] = 0xA2;
+  sdlogger_spi.buffer[5] = 0xA7;
+  sdlogger_spi.buffer[SDLOGGER_BUFFER_SIZE-1] = 0x42;
+  sdlogger_spi.idx = SDLOGGER_BUFFER_SIZE;
+  sdlogger_spi.sdcard_buf_idx = 513;
+
+  /* Callback when SPI transaction is complete */
+  sdlogger_spi_direct_multiwrite_written();
+
+  TEST_ASSERT_EQUAL_HEX(0xA2, sdcard1.output_buf[0+1]);
+  TEST_ASSERT_EQUAL_HEX(0xA7, sdcard1.output_buf[5+1]);
+  TEST_ASSERT_EQUAL_HEX(0x42, sdcard1.output_buf[SDLOGGER_BUFFER_SIZE-1+1]);
+
+  /* Also make sure both indexes are now set to new correct values */
+  TEST_ASSERT_EQUAL(SDLOGGER_BUFFER_SIZE+1, sdlogger_spi.sdcard_buf_idx);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.idx);
 }
 
 void testStopLogging(void)
 {
-  TEST_IGNORE();
+  /* Preconditions */
+  sdlogger_spi.status = SDLogger_Logging;
+  /* New switch state is OFF: */
+  radio_control.values[SDLOGGER_CONTROL_SWITCH] = -500;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_multiwrite_next_Expect(&sdcard1, NULL); TEST_IGNORE();
+
+  /* Check in periodic loop */
+  sdlogger_spi_direct_periodic();
 }
 
