@@ -777,7 +777,6 @@ void test_WriteDataBlockWithBlockAddress(void)
   TEST_ASSERT_EQUAL(SDCard_SendingCMD24, sdcard1.status);
 }
 
-
 void test_WriteDataBlockWithByteAddress(void)
 {
   sdcard1.status = SDCard_Idle;
@@ -968,7 +967,7 @@ void test_DoNotReadDataIfNotIdle(void)
   sdcard_spi_read_block(&sdcard1, 0x00000000, &helper_ExampleCallbackFunction);
 
   /* Expect zero calls to spi_submit */
-  TEST_ASSERT_EQUAL(NULL, sdcard1.read_callback);
+  TEST_ASSERT_EQUAL(NULL, sdcard1.external_callback);
 }
 
 void test_ReadDataBlockWithBlockAddress(void)
@@ -980,7 +979,7 @@ void test_ReadDataBlockWithBlockAddress(void)
   /* Call the read data function */
   sdcard_spi_read_block(&sdcard1, 0x00000014, &helper_ExampleCallbackFunction);
 
-  TEST_ASSERT_EQUAL_PTR(&helper_ExampleCallbackFunction, sdcard1.read_callback);
+  TEST_ASSERT_EQUAL_PTR(&helper_ExampleCallbackFunction, sdcard1.external_callback);
   TEST_ASSERT_EQUAL_MESSAGE(1, SpiSubmitNrCalls, "spi_submit call count mismatch.");
   TEST_ASSERT_EQUAL(SDCard_SendingCMD17, sdcard1.status);
 }
@@ -995,7 +994,7 @@ void test_ReadDataBlockWithByteAddress(void)
   /* Call the read data function */
   sdcard_spi_read_block(&sdcard1, 0x00000014, &helper_ExampleCallbackFunction);
 
-  TEST_ASSERT_EQUAL_PTR(&helper_ExampleCallbackFunction, sdcard1.read_callback);
+  TEST_ASSERT_EQUAL_PTR(&helper_ExampleCallbackFunction, sdcard1.external_callback);
   TEST_ASSERT_EQUAL_MESSAGE(1, SpiSubmitNrCalls, "spi_submit call count mismatch.");
   TEST_ASSERT_EQUAL(SDCard_SendingCMD17, sdcard1.status);
 }
@@ -1110,7 +1109,7 @@ void test_PollingDataTokenReady(void)
 void test_ReadDataBlockContent(void)
 {
   sdcard1.status = SDCard_ReadingDataBlock;
-  sdcard1.read_callback = &helper_ExampleCallbackFunction;
+  sdcard1.external_callback = &helper_ExampleCallbackFunction;
 
   /* Call the callback function */
   sdcard_spi_spicallback(&sdcard1.spi_t);
@@ -1123,7 +1122,7 @@ void test_ReadDataBlockContent(void)
 void test_ReadDataBlockContentWithoutCallback(void)
 {
   sdcard1.status = SDCard_ReadingDataBlock;
-  sdcard1.read_callback = NULL;
+  sdcard1.external_callback = NULL;
 
   /* Call the callback function */
   sdcard_spi_spicallback(&sdcard1.spi_t);
@@ -1271,8 +1270,9 @@ void test_WriteMultiWriteBlockWhenIdle(void)
   }
 
   /* Call the write function */
-  sdcard_spi_multiwrite_next(&sdcard1);
+  sdcard_spi_multiwrite_next(&sdcard1, &helper_ExampleCallbackFunction);
 
+  TEST_ASSERT_EQUAL_PTR(&helper_ExampleCallbackFunction, sdcard1.external_callback);
   TEST_ASSERT_EQUAL_MESSAGE(1, SpiSubmitNrCalls, "spi_submit call count mismatch.");
   TEST_ASSERT_EQUAL(SDCard_MultiWriteWriting, sdcard1.status);
 }
@@ -1282,7 +1282,7 @@ void test_DoNotWriteMultiWriteBlockIfNotIdle(void)
   sdcard1.status = SDCard_MultiWriteBusy;
 
   /* Multiwrite write command */
-  sdcard_spi_multiwrite_next(&sdcard1);
+  sdcard_spi_multiwrite_next(&sdcard1, &helper_ExampleCallbackFunction);
 
   /* Should not do anything */
 }
@@ -1292,6 +1292,7 @@ void test_ReadyMultiWriteSendingDataBlockAccepted(void)
 {
   sdcard1.status = SDCard_MultiWriteWriting;
   sdcard1.input_buf[515] = 0x05; /* B00000101 = data accepted */
+  sdcard1.external_callback = &helper_ExampleCallbackFunction;
 
   /* Run the callback function */
   sdcard_spi_spicallback(&sdcard1.spi_t);
@@ -1299,7 +1300,20 @@ void test_ReadyMultiWriteSendingDataBlockAccepted(void)
   /* Reset different offset for the output buffer */
   TEST_ASSERT_EQUAL_PTR(&sdcard1.output_buf, sdcard1.spi_t.output_buf);
 
+  TEST_ASSERT_TRUE(CallbackWasCalled);
   TEST_ASSERT_EQUAL(SDCard_MultiWriteBusy, sdcard1.status);
+}
+
+void testReadyMultiWriteSendingBlockAcceptedNoCallback(void)
+{
+  sdcard1.status = SDCard_MultiWriteWriting;
+  sdcard1.input_buf[515] = 0x05; /* data accepted */
+  sdcard1.external_callback = NULL;
+
+  /* Spi callback function */
+  sdcard_spi_spicallback(&sdcard1.spi_t);
+
+  TEST_ASSERT_FALSE(CallbackWasCalled);
 }
 
 void test_ReadyMultiWriteSendingDataBlockRejected(void)
@@ -1312,6 +1326,7 @@ void test_ReadyMultiWriteSendingDataBlockRejected(void)
 
   /* Reset different offset for the output buffer */
   TEST_ASSERT_EQUAL_PTR(&sdcard1.output_buf, sdcard1.spi_t.output_buf);
+  TEST_ASSERT_FALSE(CallbackWasCalled);
   TEST_ASSERT_EQUAL(SDCard_Error, sdcard1.status);
 }
 

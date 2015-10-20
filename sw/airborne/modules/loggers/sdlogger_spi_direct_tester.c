@@ -444,10 +444,18 @@ void testPutByteIntoSDBuffer(void)
   TEST_ASSERT_EQUAL(0x33, sdcard1.output_buf[3]);
 }
 
+/**
+ * @brief testSDBufferGetsFull
+ * If the SD Card buffer is full, it will be busy writing this stuff. Until the
+ * SPI transaction is finished, any further write requests are saved in the
+ * logger buffer. If then the SPI transaction is finished, this logger buffer is
+ * copied into the SD Card buffer.
+ */
 void testSDBufferGetsFull(void)
 {
   /* Pre-conditions */
   helperInitializeLogger();
+  /* Last element in the buffer: */
   sdlogger_spi.sdcard_buf_idx = 512;
 
   /* Expectations */
@@ -456,7 +464,7 @@ void testSDBufferGetsFull(void)
   /* Put byte call through messages.h and pprzlog_tp */
   sdlogger_spi_direct_put_byte(sdlogger_spi.device.periph, 0xAB);
 
-  /* Values set in sd buffer, overflow in internal buffer */
+  /* Values set in sd buffer, index reset */
   TEST_ASSERT_EQUAL(0xAB, sdcard1.output_buf[512]);
   TEST_ASSERT_EQUAL(1, sdlogger_spi.sdcard_buf_idx);
 
