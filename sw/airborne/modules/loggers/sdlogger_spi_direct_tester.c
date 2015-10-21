@@ -3,6 +3,7 @@
 #include "Mockmessages_testable.h"
 #include "peripherals/Mocksdcard_spi.h"
 #include "loggers/sdlogger_spi_direct.h"
+#include "subsystems/datalink/Mockpprzlog_transport.h"
 
 #define S(x) #x
 #define S_(x) S(x)
@@ -42,7 +43,7 @@ struct spi_periph spi2;
 struct RadioControl radio_control;
 
 /* Actually defined in pprzlog_transport.c */
-//struct pprzlog_transport pprzlog_tp;
+struct pprzlog_transport pprzlog_tp;
 
 /* Actually defined in sdlogger_spi_direct.c */
 //struct sdlogger_spi_periph sdlogger_spi;
@@ -120,6 +121,7 @@ void setUp(void)
   radio_control.values[SDLOGGER_CONTROL_SWITCH] = 0;
 
   Mocksdcard_spi_Init();
+  Mockpprzlog_transport_Init();
 }
 
 void tearDown(void)
@@ -129,6 +131,8 @@ void tearDown(void)
 
   Mocksdcard_spi_Verify();
   Mocksdcard_spi_Destroy();
+  Mockpprzlog_transport_Verify();
+  Mockpprzlog_transport_Destroy();
 }
 
 void helperInitializeLogger(void)
@@ -138,6 +142,8 @@ void helperInitializeLogger(void)
   sdcard_spi_init_Expect(&sdcard1,
                          &(SDLOGGER_SPI_LINK_DEVICE),
                          SDLOGGER_SPI_LINK_SLAVE_NUMBER);
+  /* Expect initialization of pprzlog_tp! */
+  pprzlog_transport_init_Expect();
 
   /* Call the function */
   sdlogger_spi_direct_init();
