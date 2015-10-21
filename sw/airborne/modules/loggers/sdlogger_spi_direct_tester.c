@@ -73,13 +73,18 @@ void gpio_clear(uint32_t gpioport, uint16_t gpios)
   if (gpioport == LED_3_GPIO && gpios == LED_3_GPIO_PIN)
     FAKE_LED[2] = TRUE;
 }
-#else
-#warning Not testing LED functionality
-#endif
 
 bool_t LED_STATUS(uint8_t led) {
   return FAKE_LED[led-1];
 }
+
+void LED_SET(uint8_t led, bool_t status) {
+  FAKE_LED[led-1] = status;
+}
+#else
+#warning Not testing LED functionality
+#endif
+
 
 void setUp(void)
 {
@@ -99,6 +104,7 @@ void setUp(void)
   sdlogger_spi.last_completed = 123;
   sdlogger_spi.sdcard_buf_idx = 123;
   sdlogger_spi.idx = 123;
+  sdlogger_spi.log_len = 123;
 
   /* Set incorrect values to sdcard buffers */
   for (uint16_t i = 0; i < SD_BLOCK_SIZE + 10; i++) {
@@ -177,6 +183,7 @@ void testInitializeLoggerStruct(void)
     TEST_ASSERT_EQUAL(0, sdlogger_spi.buffer[i]);
   }
   TEST_ASSERT_EQUAL(0, sdlogger_spi.idx);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.log_len);
   /*  Link device function references: */
   TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.check_free_space,
                         &sdlogger_spi_direct_check_free_space);
@@ -260,6 +267,9 @@ void testWaitWhileRetreivingIndex(void)
  * A callback is generated when the index page is received, upon request just
  * after initialization. The next available address and last completed log
  * information are stored for later use.
+ *
+ * For now, this information is not used but overwritten. Multiple logs are
+ * possible while logging with power on.
  */
 void testSaveIndexInformationForLaterUse(void)
 {
@@ -275,8 +285,8 @@ void testSaveIndexInformationForLaterUse(void)
   sdlogger_spi_direct_index_received();
 
   /* Verify correct values set by function */
-  TEST_ASSERT_EQUAL(0x12345678, sdlogger_spi.next_available_address);
-  TEST_ASSERT_EQUAL(12, sdlogger_spi.last_completed);
+  TEST_ASSERT_EQUAL(0x00004000, sdlogger_spi.next_available_address);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.last_completed);
   /* State change */
   TEST_ASSERT_EQUAL(SDLogger_Ready, sdlogger_spi.status);
 }
@@ -680,10 +690,12 @@ void testCopyLoggerBufferToSDCardWhenSpiTransactionFinished(void)
   sdlogger_spi.buffer[SDLOGGER_BUFFER_SIZE-1] = 0x42;
   sdlogger_spi.idx = SDLOGGER_BUFFER_SIZE;
   sdlogger_spi.sdcard_buf_idx = 513;
+  sdlogger_spi.log_len = 5000;
 
   /* Callback when SPI transaction is complete */
   sdlogger_spi_direct_multiwrite_written();
 
+  /* Check if stuff is copied from logger buffer to sdcard buffer */
   TEST_ASSERT_EQUAL_HEX(0xA2, sdcard1.output_buf[0+1]);
   TEST_ASSERT_EQUAL_HEX(0xA7, sdcard1.output_buf[5+1]);
   TEST_ASSERT_EQUAL_HEX(0x42, sdcard1.output_buf[SDLOGGER_BUFFER_SIZE-1+1]);
@@ -691,6 +703,8 @@ void testCopyLoggerBufferToSDCardWhenSpiTransactionFinished(void)
   /* Also make sure both indexes are now set to new correct values */
   TEST_ASSERT_EQUAL(SDLOGGER_BUFFER_SIZE+1, sdlogger_spi.sdcard_buf_idx);
   TEST_ASSERT_EQUAL(0, sdlogger_spi.idx);
+  /* Check increment in log length, because another block was logged */
+  TEST_ASSERT_EQUAL(5001, sdlogger_spi.log_len);
 }
 
 void testStopLogging(void)
@@ -831,4 +845,114 @@ void testReadyFinishingMultiWriteThenRequestIndexPage(void)
   helperInitializeLogger();
   sdlogger_spi.status = SDLogger_StoppedLogging;
   sdcard1.status = SDCard_Idle;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_read_block_Expect(&sdcard1, 0x00002000, &sdlogger_spi_direct_index_received);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL(SDLogger_GettingIndexForUpdate, sdlogger_spi.status);
+}
+
+/**
+ * @brief callbackIndexReceivedWhileReadyForUpdatingIt
+ * @param sdcard
+ * @param addr
+ * @param callback
+ * @param cmock_num_calls
+ * Callback to test values in sdcard_spi call in the unittest below.
+ */
+void callbackIndexReceivedWhileReadyForUpdatingIt(struct SDCard* sdcard, uint32_t addr, int cmock_num_calls)
+{
+  (void) sdcard; (void) addr; (void) cmock_num_calls;
+
+  /* Check values in the output buffer */
+  /* Next_available_address incremented by 1024: */
+  TEST_ASSERT_EQUAL_HEX(0x12, sdcard1.output_buf[0+5]);
+  TEST_ASSERT_EQUAL_HEX(0x34, sdcard1.output_buf[1+5]);
+  TEST_ASSERT_EQUAL_HEX(0x5A, sdcard1.output_buf[2+5]);
+  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[3+5]);
+  TEST_ASSERT_EQUAL(2, sdcard1.output_buf[4+5]);
+
+  /* Start address and length written at dedicated location for log number 2 */
+  TEST_ASSERT_EQUAL_HEX(0x12, sdcard1.output_buf[17+5]);
+  TEST_ASSERT_EQUAL_HEX(0x34, sdcard1.output_buf[18+5]);
+  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[19+5]);
+  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[20+5]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[21+5]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[22+5]);
+  TEST_ASSERT_EQUAL_HEX(0x04, sdcard1.output_buf[23+5]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[24+5]);
+}
+
+/**
+ * @brief testIndexReceivedWhileReadyForUpdatingIt
+ * Logging was finished, now the index is received. The input buffer is copied
+ * to the output buffer and appropriate values are updated.
+ */
+void testIndexReceivedWhileReadyForUpdatingIt(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_GettingIndexForUpdate;
+  sdcard1.status = SDCard_Idle;
+  /* Previous data in the index: */
+  sdlogger_spi.next_available_address = 0x12345656;
+  sdlogger_spi.last_completed = 1;
+  sdcard1.input_buf[4] = 1;
+  sdlogger_spi.log_len = 1024;
+  for (uint16_t i = 5; i < SD_BLOCK_SIZE; i++) {
+    sdcard1.input_buf[i] = 0x00;
+  }
+
+  /* Expectations */
+  sdcard_spi_write_block_Expect(&sdcard1, 0x00002000);
+  sdcard_spi_write_block_StubWithCallback(&callbackIndexReceivedWhileReadyForUpdatingIt);
+
+  /* Index received callback */
+  sdlogger_spi_direct_index_received();
+
+  /* Next address updated for next log */
+  TEST_ASSERT_EQUAL(0x12345A56, sdlogger_spi.next_available_address);
+  /* Log length reset */
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.log_len);
+  TEST_ASSERT_EQUAL(SDLogger_UpdatingIndex, sdlogger_spi.status);
+}
+
+void testKeepUpdatingIndex(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_UpdatingIndex;
+  sdcard1.status = SDCard_Busy;
+
+  /* Expecations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+}
+
+void testReadyUpdatingIndex(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_UpdatingIndex;
+  sdcard1.status = SDCard_Idle;
+  /* Led is on, should go off */
+#ifdef LOGGER_LED
+  LED_SET(LOGGER_LED, TRUE);
+#endif
+  /* Expecations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL(SDLogger_Ready, sdlogger_spi.status);
+#ifdef LOGGER_LED
+  TEST_ASSERT_FALSE(LED_STATUS(LOGGER_LED));
+#endif
 }
