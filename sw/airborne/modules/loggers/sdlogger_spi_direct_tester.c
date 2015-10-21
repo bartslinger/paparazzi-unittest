@@ -4,6 +4,7 @@
 #include "peripherals/Mocksdcard_spi.h"
 #include "loggers/sdlogger_spi_direct.h"
 #include "subsystems/datalink/Mockpprzlog_transport.h"
+#include "mcu_periph/Mockuart.h"
 
 #define S(x) #x
 #define S_(x) S(x)
@@ -45,8 +46,8 @@ struct RadioControl radio_control;
 /* Actually defined in pprzlog_transport.c */
 struct pprzlog_transport pprzlog_tp;
 
-/* Actually defined in sdlogger_spi_direct.c */
-//struct sdlogger_spi_periph sdlogger_spi;
+/* Actually defined in uart.c */
+struct uart_periph uart1;
 
 /* Struct to save original state to revert to before each test */
 struct sdlogger_spi_periph sdlogger_spi_original;
@@ -86,6 +87,8 @@ void LED_SET(uint8_t led, bool_t status) {
 #warning Not testing LED functionality
 #endif
 
+/* Private functions */
+void sdlogger_spi_direct_block_to_uart(void);
 
 void setUp(void)
 {
@@ -106,6 +109,8 @@ void setUp(void)
   sdlogger_spi.sdcard_buf_idx = 123;
   sdlogger_spi.idx = 123;
   sdlogger_spi.log_len = 123;
+  sdlogger_spi.command = 123;
+  sdlogger_spi.download_id = 123;
 
   /* Set incorrect values to sdcard buffers */
   for (uint16_t i = 0; i < SD_BLOCK_SIZE + 10; i++) {
@@ -122,6 +127,7 @@ void setUp(void)
 
   Mocksdcard_spi_Init();
   Mockpprzlog_transport_Init();
+  Mockuart_Init();
 }
 
 void tearDown(void)
@@ -133,6 +139,8 @@ void tearDown(void)
   Mocksdcard_spi_Destroy();
   Mockpprzlog_transport_Verify();
   Mockpprzlog_transport_Destroy();
+  Mockuart_Verify();
+  Mockuart_Destroy();
 }
 
 void helperInitializeLogger(void)
@@ -190,6 +198,8 @@ void testInitializeLoggerStruct(void)
   }
   TEST_ASSERT_EQUAL(0, sdlogger_spi.idx);
   TEST_ASSERT_EQUAL(0, sdlogger_spi.log_len);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.command);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.download_id);
   /*  Link device function references: */
   TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.check_free_space,
                         &sdlogger_spi_direct_check_free_space);
@@ -941,6 +951,10 @@ void testKeepUpdatingIndex(void)
   sdlogger_spi_direct_periodic();
 }
 
+/**
+ * @brief testReadyUpdatingIndex
+ * If the index is updated, everything is back in ready state.
+ */
 void testReadyUpdatingIndex(void)
 {
   /* Preconditions */
@@ -958,6 +972,214 @@ void testReadyUpdatingIndex(void)
   sdlogger_spi_direct_periodic();
 
   TEST_ASSERT_EQUAL(SDLogger_Ready, sdlogger_spi.status);
+#ifdef LOGGER_LED
+  TEST_ASSERT_FALSE(LED_STATUS(LOGGER_LED));
+#endif
+}
+
+/**
+ * @brief testCommandAlwaysResetToZero
+ * Whenever the setting function is called, always reset the command value
+ * back to zero.
+ */
+void testCommandAlwaysResetToZero(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.command = 10;
+
+  /* Command call */
+  sdlogger_spi_direct_command();
+
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.command);
+}
+
+/**
+ * @brief testCommandAlwaysResetToZero
+ * Whenever the setting function is called, always reset the command value
+ * back to zero.
+ */
+void testCommandInRange1to42(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.command = 0;
+  sdcard1.status = SDCard_Idle;
+
+  /* Command call */
+  sdlogger_spi_direct_command();
+
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.command);
+
+  /* Test for a too large number */
+  sdlogger_spi.command = 43;
+  sdcard1.status = SDCard_Idle;
+
+  /* Command call */
+  sdlogger_spi_direct_command();
+
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.command);
+}
+
+void testDoNothingIfCardNotIdle(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.command = 10;
+  sdcard1.status = SDCard_Busy;
+
+  /* Command call */
+  sdlogger_spi_direct_command();
+
+#ifdef LOGGER_LED
+  TEST_ASSERT_FALSE(LED_STATUS(LOGGER_LED));
+#endif
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.command);
+}
+
+void testIfCommandNotZeroStartDownloadingLog(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.command = 2;
+  sdcard1.status = SDCard_Idle;
+
+  /* Expectations */
+  sdcard_spi_read_block_Expect(&sdcard1, 0x00002000,
+                               &sdlogger_spi_direct_index_received);
+
+  /* Command call */
+  sdlogger_spi_direct_command();
+
+  /* LED is on */
+#ifdef LOGGER_LED
+  TEST_ASSERT_TRUE(LED_STATUS(LOGGER_LED));
+#endif
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.command);
+  TEST_ASSERT_EQUAL(SDLogger_GettingIndexForDownload, sdlogger_spi.status);
+  TEST_ASSERT_EQUAL(2, sdlogger_spi.download_id);
+}
+
+/**
+ * @brief testPutBlockToUART
+ * This is a for a private function which gets all bytes from sdcard output
+ * buffer and puts it to UART as soon as there is space free. Blocking on
+ * purpose.
+ */
+void testPutBlockToUART(void)
+{
+  /* Preconditions */
+  sdcard1.input_buf[0] = 0xAA;
+  for (uint16_t i = 1; i < SD_BLOCK_SIZE-1; i++) {
+    sdcard1.input_buf[i] = 0xEE;
+  }
+  sdcard1.input_buf[SD_BLOCK_SIZE-1] = 0x33;
+
+  /* Expectations */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
+  /* Call again until there is free space */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  /* Space is available, put next byte */
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, 0xAA);
+  /* Expect a lot of bytes then to be written */
+  for (uint16_t i = 1; i < SD_BLOCK_SIZE - 1; i++) {
+    uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+    uart_put_byte_Expect(&DOWNLINK_DEVICE, 0xEE);
+  }
+  /* Final byte: */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, 0x33);
+
+  /* Call the private function */
+  sdlogger_spi_direct_block_to_uart();
+}
+
+void helperExpectWriteUartBlock(void)
+{
+  /* Expectations */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
+  /* Call again until there is free space */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  /* Space is available, put next byte */
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, 0xAA);
+  uart_put_byte_IgnoreArg_data();
+  /* Expect a lot of bytes then to be written */
+  for (uint16_t i = 1; i < SD_BLOCK_SIZE - 1; i++) {
+    uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+    uart_put_byte_Expect(&DOWNLINK_DEVICE, 0xEE);
+    uart_put_byte_IgnoreArg_data();
+  }
+  /* Final byte: */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, 0x33);
+  uart_put_byte_IgnoreArg_data();
+}
+
+void stubSdcardSpiPeriodic(struct SDCard *sdcard, int cmock_num_calls)
+{
+  (void) sdcard;
+  cmock_num_calls++; // Easier to start with 1 for the first call
+  if (cmock_num_calls % 2 == 0) {
+    sdcard1.status = SDCard_Idle;
+  }
+  else {
+    sdcard1.status = SDCard_Busy;
+  }
+}
+
+void stubSdCardSpiReadBlock(struct SDCard *sdcard, uint32_t addr,
+                            SDCardCallback callback, int cmock_num_calls)
+{
+  (void) sdcard; (void) addr; (void) callback; (void) cmock_num_calls;
+  sdcard1.status = SDCard_Busy;
+}
+
+/**
+ * @brief testGotIndexForDownloadStartProcess
+ * Index is received, check the address and length of log to read.
+ */
+void testGotIndexForDownloadStartProcess(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdcard1.status = SDCard_Idle;
+  sdlogger_spi.status = SDLogger_GettingIndexForDownload;
+  helperAssignUint(&sdcard1.input_buf[0], 0x12123434);
+  sdcard1.input_buf[4] = 12;
+  sdlogger_spi.download_id = 3;
+  /* Led is on, should go off */
+#ifdef LOGGER_LED
+  LED_SET(LOGGER_LED, TRUE);
+#endif
+
+  /* Location and length of log 3 are stored here: */
+  helperAssignUint(&sdcard1.input_buf[29], 0x22223333);
+  helperAssignUint(&sdcard1.input_buf[29+4], 3);
+
+  /* Stub sdcard_spi_periodic() */
+  sdcard_spi_periodic_StubWithCallback(&stubSdcardSpiPeriodic);
+  sdcard_spi_read_block_StubWithCallback(&stubSdCardSpiReadBlock);
+
+  /* Expectations */
+  sdcard_spi_read_block_Expect(&sdcard1, 0x22223333, NULL);
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_periodic_Expect(&sdcard1);
+  helperExpectWriteUartBlock();
+  sdcard_spi_read_block_Expect(&sdcard1, 0x22223334, NULL);
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_periodic_Expect(&sdcard1);
+  helperExpectWriteUartBlock();
+  sdcard_spi_read_block_Expect(&sdcard1, 0x22223335, NULL);
+  sdcard_spi_periodic_Expect(&sdcard1);
+  sdcard_spi_periodic_Expect(&sdcard1);
+  helperExpectWriteUartBlock();
+
+  /* Callback when index is available */
+  sdlogger_spi_direct_index_received();
+
+  /* LED off when done */
 #ifdef LOGGER_LED
   TEST_ASSERT_FALSE(LED_STATUS(LOGGER_LED));
 #endif

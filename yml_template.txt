@@ -23,6 +23,7 @@ compiler:
 #    - -Wundef
     - -Wunsafe-loop-optimizations
     - -Wold-style-definition
+    - -DCMOCK_MEM_DYNAMIC='1'
 MACRO_ITEMS
   includes:
     prefix: '-I'
