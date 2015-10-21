@@ -111,6 +111,8 @@ void setUp(void)
   sdlogger_spi.log_len = 123;
   sdlogger_spi.command = 123;
   sdlogger_spi.download_id = 123;
+  sdlogger_spi.download_address = 123;
+  sdlogger_spi.download_length = 123;
 
   /* Set incorrect values to sdcard buffers */
   for (uint16_t i = 0; i < SD_BLOCK_SIZE + 10; i++) {
@@ -200,6 +202,8 @@ void testInitializeLoggerStruct(void)
   TEST_ASSERT_EQUAL(0, sdlogger_spi.log_len);
   TEST_ASSERT_EQUAL(0, sdlogger_spi.command);
   TEST_ASSERT_EQUAL(0, sdlogger_spi.download_id);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.download_address);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.download_length);
   /*  Link device function references: */
   TEST_ASSERT_EQUAL_PTR(sdlogger_spi.device.check_free_space,
                         &sdlogger_spi_direct_check_free_space);
@@ -886,21 +890,21 @@ void callbackIndexReceivedWhileReadyForUpdatingIt(struct SDCard* sdcard, uint32_
 
   /* Check values in the output buffer */
   /* Next_available_address incremented by 1024: */
-  TEST_ASSERT_EQUAL_HEX(0x12, sdcard1.output_buf[0+5]);
-  TEST_ASSERT_EQUAL_HEX(0x34, sdcard1.output_buf[1+5]);
-  TEST_ASSERT_EQUAL_HEX(0x5A, sdcard1.output_buf[2+5]);
-  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[3+5]);
-  TEST_ASSERT_EQUAL(2, sdcard1.output_buf[4+5]);
+  TEST_ASSERT_EQUAL_HEX(0x12, sdcard1.output_buf[0+6]);
+  TEST_ASSERT_EQUAL_HEX(0x34, sdcard1.output_buf[1+6]);
+  TEST_ASSERT_EQUAL_HEX(0x5A, sdcard1.output_buf[2+6]);
+  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[3+6]);
+  TEST_ASSERT_EQUAL(2, sdcard1.output_buf[4+6]);
 
   /* Start address and length written at dedicated location for log number 2 */
-  TEST_ASSERT_EQUAL_HEX(0x12, sdcard1.output_buf[17+5]);
-  TEST_ASSERT_EQUAL_HEX(0x34, sdcard1.output_buf[18+5]);
-  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[19+5]);
-  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[20+5]);
-  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[21+5]);
-  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[22+5]);
-  TEST_ASSERT_EQUAL_HEX(0x04, sdcard1.output_buf[23+5]);
-  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[24+5]);
+  TEST_ASSERT_EQUAL_HEX(0x12, sdcard1.output_buf[17+6]);
+  TEST_ASSERT_EQUAL_HEX(0x34, sdcard1.output_buf[18+6]);
+  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[19+6]);
+  TEST_ASSERT_EQUAL_HEX(0x56, sdcard1.output_buf[20+6]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[21+6]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[22+6]);
+  TEST_ASSERT_EQUAL_HEX(0x04, sdcard1.output_buf[23+6]);
+  TEST_ASSERT_EQUAL_HEX(0x00, sdcard1.output_buf[24+6]);
 }
 
 /**
@@ -1060,127 +1064,173 @@ void testIfCommandNotZeroStartDownloadingLog(void)
   TEST_ASSERT_EQUAL(2, sdlogger_spi.download_id);
 }
 
-/**
- * @brief testPutBlockToUART
- * This is a for a private function which gets all bytes from sdcard output
- * buffer and puts it to UART as soon as there is space free. Blocking on
- * purpose.
- */
-void testPutBlockToUART(void)
+void testIndexReadyNowStartDownload(void)
 {
   /* Preconditions */
-  sdcard1.input_buf[0] = 0xAA;
-  for (uint16_t i = 1; i < SD_BLOCK_SIZE-1; i++) {
-    sdcard1.input_buf[i] = 0xEE;
-  }
-  sdcard1.input_buf[SD_BLOCK_SIZE-1] = 0x33;
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_GettingIndexForDownload;
+  sdlogger_spi.download_id = 3;
+  /* Address and length of the corresponding log are found here */
+  helperAssignUint(&sdcard1.input_buf[29], 0x12123445);
+  helperAssignUint(&sdcard1.input_buf[29+4], 4);
 
   /* Expectations */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
-  /* Call again until there is free space */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  /* Space is available, put next byte */
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, 0xAA);
-  /* Expect a lot of bytes then to be written */
-  for (uint16_t i = 1; i < SD_BLOCK_SIZE - 1; i++) {
-    uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-    uart_put_byte_Expect(&DOWNLINK_DEVICE, 0xEE);
-  }
-  /* Final byte: */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, 0x33);
+  sdcard_spi_read_block_Expect(&sdcard1, 0x12123445, NULL);
+  /* Triggered by spi callback */
+  sdlogger_spi_direct_index_received();
 
-  /* Call the private function */
-  sdlogger_spi_direct_block_to_uart();
+  /* Downloading state */
+  TEST_ASSERT_EQUAL(SDLogger_Downloading, sdlogger_spi.status);
+  TEST_ASSERT_EQUAL_HEX(0x12123445+1, sdlogger_spi.download_address);
+  TEST_ASSERT_EQUAL(4-1, sdlogger_spi.download_length);
+  /* Will be used to track which bytes are written to uart */
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.sdcard_buf_idx);
 }
 
-void helperExpectWriteUartBlock(void)
+void testDownloadContainsNoBlocks(void)
 {
-  /* Expectations */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
-  /* Call again until there is free space */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  /* Space is available, put next byte */
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, 0xAA);
-  uart_put_byte_IgnoreArg_data();
-  /* Expect a lot of bytes then to be written */
-  for (uint16_t i = 1; i < SD_BLOCK_SIZE - 1; i++) {
-    uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-    uart_put_byte_Expect(&DOWNLINK_DEVICE, 0xEE);
-    uart_put_byte_IgnoreArg_data();
-  }
-  /* Final byte: */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, 0x33);
-  uart_put_byte_IgnoreArg_data();
-}
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_GettingIndexForDownload;
+  sdlogger_spi.download_id = 3;
+  /* Address and length of the corresponding log are found here */
+  helperAssignUint(&sdcard1.input_buf[29], 0x12123445);
+  /* Log contains NO BLOCKS */
+  helperAssignUint(&sdcard1.input_buf[29+4], 0);
+#ifdef LOGGER_LED
+  LED_SET(LOGGER_LED, TRUE);
+#endif
 
-void stubSdcardSpiPeriodic(struct SDCard *sdcard, int cmock_num_calls)
-{
-  (void) sdcard;
-  cmock_num_calls++; // Easier to start with 1 for the first call
-  if (cmock_num_calls % 2 == 0) {
-    sdcard1.status = SDCard_Idle;
-  }
-  else {
-    sdcard1.status = SDCard_Busy;
-  }
-}
+  /* Triggered by spi callback */
+  sdlogger_spi_direct_index_received();
 
-void stubSdCardSpiReadBlock(struct SDCard *sdcard, uint32_t addr,
-                            SDCardCallback callback, int cmock_num_calls)
-{
-  (void) sdcard; (void) addr; (void) callback; (void) cmock_num_calls;
-  sdcard1.status = SDCard_Busy;
+  /* Downloading state */
+  TEST_ASSERT_EQUAL(SDLogger_Ready, sdlogger_spi.status);
+  TEST_ASSERT_EQUAL_HEX(0x12123445, sdlogger_spi.download_address);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.download_length);
+  /* Will be used to track which bytes are written to uart */
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.sdcard_buf_idx);
+  /* LED is off */
+#ifdef LOGGER_LED
+  TEST_ASSERT_FALSE(LED_STATUS(LOGGER_LED));
+#endif
 }
 
 /**
- * @brief testGotIndexForDownloadStartProcess
- * Index is received, check the address and length of log to read.
+ * @brief testPeriodicLoopDownloadingSDCardBusy
+ * Make sure to do nothing if SD Card is busy
  */
-void testGotIndexForDownloadStartProcess(void)
+void testPeriodicLoopDownloadingSDCardBusy(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.status = SDLogger_Downloading;
+  sdcard1.status = SDCard_Busy;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  /* Nothing else */
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  TEST_ASSERT_EQUAL(SDLogger_Downloading, sdlogger_spi.status);
+}
+
+void testPeriodicLoopDownloading(void)
 {
   /* Preconditions */
   helperInitializeLogger();
   sdcard1.status = SDCard_Idle;
-  sdlogger_spi.status = SDLogger_GettingIndexForDownload;
-  helperAssignUint(&sdcard1.input_buf[0], 0x12123434);
-  sdcard1.input_buf[4] = 12;
-  sdlogger_spi.download_id = 3;
+  sdlogger_spi.status = SDLogger_Downloading;
+  sdlogger_spi.download_address = 0x12123445+1;
+  sdlogger_spi.download_length = 4-1;
+  sdlogger_spi.sdcard_buf_idx = 0;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  /* Space for 3 bytes */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[0]);
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[1]);
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[2]);
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  /* Unchanged address and length */
+  TEST_ASSERT_EQUAL_HEX(0x12123445+1, sdlogger_spi.download_address);
+  TEST_ASSERT_EQUAL(4-1, sdlogger_spi.download_length);
+  TEST_ASSERT_EQUAL(3, sdlogger_spi.sdcard_buf_idx);
+}
+
+void testPeriodicLoopDownloadingBufferWrittenAndRequestNext(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdcard1.status = SDCard_Idle;
+  sdlogger_spi.status = SDLogger_Downloading;
+  sdlogger_spi.download_address = 0x12123445+1;
+  sdlogger_spi.download_length = 4-1;
+  sdlogger_spi.sdcard_buf_idx = 510;
+
+  /* Expectations */
+  sdcard_spi_periodic_Expect(&sdcard1);
+  /* Space for 2 bytes before all is written */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[510]);
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[511]);
+  sdcard_spi_read_block_Expect(&sdcard1, 0x12123445+1, NULL);
+
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
+
+  /* Incremented address and decremented length */
+  TEST_ASSERT_EQUAL_HEX(0x12123445+2, sdlogger_spi.download_address);
+  TEST_ASSERT_EQUAL(4-2, sdlogger_spi.download_length);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.sdcard_buf_idx);
+}
+
+void testPeriodicLoopDownloadingLastDataWritten(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdcard1.status = SDCard_Idle;
+  sdlogger_spi.status = SDLogger_Downloading;
+  /* This would be the address of the next block, but it does not contain
+   * data on this log. Final block was already read. */
+  sdlogger_spi.download_address = 0x12123445+4;
+  sdlogger_spi.download_length = 4-4;
+  sdlogger_spi.sdcard_buf_idx = 510;
   /* Led is on, should go off */
 #ifdef LOGGER_LED
   LED_SET(LOGGER_LED, TRUE);
 #endif
 
-  /* Location and length of log 3 are stored here: */
-  helperAssignUint(&sdcard1.input_buf[29], 0x22223333);
-  helperAssignUint(&sdcard1.input_buf[29+4], 3);
-
-  /* Stub sdcard_spi_periodic() */
-  sdcard_spi_periodic_StubWithCallback(&stubSdcardSpiPeriodic);
-  sdcard_spi_read_block_StubWithCallback(&stubSdCardSpiReadBlock);
-
   /* Expectations */
-  sdcard_spi_read_block_Expect(&sdcard1, 0x22223333, NULL);
   sdcard_spi_periodic_Expect(&sdcard1);
-  sdcard_spi_periodic_Expect(&sdcard1);
-  helperExpectWriteUartBlock();
-  sdcard_spi_read_block_Expect(&sdcard1, 0x22223334, NULL);
-  sdcard_spi_periodic_Expect(&sdcard1);
-  sdcard_spi_periodic_Expect(&sdcard1);
-  helperExpectWriteUartBlock();
-  sdcard_spi_read_block_Expect(&sdcard1, 0x22223335, NULL);
-  sdcard_spi_periodic_Expect(&sdcard1);
-  sdcard_spi_periodic_Expect(&sdcard1);
-  helperExpectWriteUartBlock();
+  /* Space for 2 bytes before all is written */
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[510]);
+  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[511]);
+  /* Expect no more read block */
 
-  /* Callback when index is available */
-  sdlogger_spi_direct_index_received();
+  /* Periodic loop */
+  sdlogger_spi_direct_periodic();
 
-  /* LED off when done */
+  /* Unchanged address and length */
+  TEST_ASSERT_EQUAL_HEX(0x12123445+4, sdlogger_spi.download_address);
+  TEST_ASSERT_EQUAL(4-4, sdlogger_spi.download_length);
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.sdcard_buf_idx);
+  TEST_ASSERT_EQUAL(SDLogger_Ready, sdlogger_spi.status);
+  /* LED is off */
 #ifdef LOGGER_LED
   TEST_ASSERT_FALSE(LED_STATUS(LOGGER_LED));
 #endif
+
 }
