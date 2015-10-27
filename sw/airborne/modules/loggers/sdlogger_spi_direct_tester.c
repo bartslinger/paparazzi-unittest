@@ -5,6 +5,7 @@
 #include "loggers/sdlogger_spi_direct.h"
 #include "subsystems/datalink/Mockpprzlog_transport.h"
 #include "mcu_periph/Mockuart.h"
+#include "generated/Mockperiodic_telemetry.h"
 
 #define S(x) #x
 #define S_(x) S(x)
@@ -48,6 +49,15 @@ struct pprzlog_transport pprzlog_tp;
 
 /* Actually defined in uart.c */
 struct uart_periph uart1;
+
+/* Actually defined in periodic_telemetry.c */
+uint8_t telemetry_mode_Main;
+uint8_t telemetry_mode_Logger;
+
+/* Actually defined in telemetry.c */
+telemetry_msg telemetry_msgs[TELEMETRY_NB_MSG] = TELEMETRY_MSG_NAMES;
+telemetry_cb telemetry_cbs[TELEMETRY_NB_MSG] = TELEMETRY_CBS_NULL;
+struct periodic_telemetry pprz_telemetry = { TELEMETRY_NB_MSG, telemetry_msgs, telemetry_cbs };
 
 /* Struct to save original state to revert to before each test */
 struct sdlogger_spi_periph sdlogger_spi_original;
@@ -542,7 +552,7 @@ void testCheckFreeSpaceBothBuffersJustNotPossible(void)
   /* Requesting free space */
   bool_t available = sdlogger_spi_direct_check_free_space(
                        sdlogger_spi.device.periph,
-                       68);
+                       4+SDLOGGER_BUFFER_SIZE);
   /* There is (just) not enough space */
   TEST_ASSERT_FALSE(available);
 }
@@ -1064,6 +1074,42 @@ void testIfCommandNotZeroStartDownloadingLog(void)
   TEST_ASSERT_EQUAL(2, sdlogger_spi.download_id);
 }
 
+/**
+ * @brief testGetIndexAndPutToUart
+ * This is accomplished by putting it in download state with no more downloads
+ * left after the first block (which is the index).
+ * command value 255 returns the index
+ */
+void testGetIndexAndPutToUart(void)
+{
+  /* Preconditions */
+  helperInitializeLogger();
+  sdlogger_spi.command = 255;
+  sdcard1.status = SDCard_Idle;
+  /* Wrong number to ensure reset */
+  sdlogger_spi.download_length = 123;
+  sdlogger_spi.sdcard_buf_idx = 123;
+
+  /* Expectations */
+  sdcard_spi_read_block_Expect(&sdcard1, 0x00002000, NULL);
+
+  /* Command call */
+  sdlogger_spi_direct_command();
+
+  /* Reset buf idx */
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.sdcard_buf_idx);
+  /* Telemetry disabled */
+  TEST_ASSERT_EQUAL(TELEMETRY_MODE_Main_empty, telemetry_mode_Main);
+  /* LED is on */
+#ifdef LOGGER_LED
+  TEST_ASSERT_TRUE(LED_STATUS(LOGGER_LED));
+#endif
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.command);
+  TEST_ASSERT_EQUAL(SDLogger_Downloading, sdlogger_spi.status);
+  /* To prevent more downloads after this index block: */
+  TEST_ASSERT_EQUAL(0, sdlogger_spi.download_length);
+}
+
 void testIndexReadyNowStartDownload(void)
 {
   /* Preconditions */
@@ -1150,13 +1196,13 @@ void testPeriodicLoopDownloading(void)
   /* Expectations */
   sdcard_spi_periodic_Expect(&sdcard1);
   /* Space for 3 bytes */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[0]);
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[1]);
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[2]);
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, FALSE);
+  uart_check_free_space_ExpectAndReturn(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, sdcard1.input_buf[0]);
+  uart_check_free_space_ExpectAndReturn(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, sdcard1.input_buf[1]);
+  uart_check_free_space_ExpectAndReturn(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, sdcard1.input_buf[2]);
+  uart_check_free_space_ExpectAndReturn(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, 1, FALSE);
 
   /* Periodic loop */
   sdlogger_spi_direct_periodic();
@@ -1180,10 +1226,10 @@ void testPeriodicLoopDownloadingBufferWrittenAndRequestNext(void)
   /* Expectations */
   sdcard_spi_periodic_Expect(&sdcard1);
   /* Space for 2 bytes before all is written */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[510]);
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[511]);
+  uart_check_free_space_ExpectAndReturn(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, sdcard1.input_buf[510]);
+  uart_check_free_space_ExpectAndReturn(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, sdcard1.input_buf[511]);
   sdcard_spi_read_block_Expect(&sdcard1, 0x12123445+1, NULL);
 
   /* Periodic loop */
@@ -1214,10 +1260,10 @@ void testPeriodicLoopDownloadingLastDataWritten(void)
   /* Expectations */
   sdcard_spi_periodic_Expect(&sdcard1);
   /* Space for 2 bytes before all is written */
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[510]);
-  uart_check_free_space_ExpectAndReturn(&DOWNLINK_DEVICE, 1, TRUE);
-  uart_put_byte_Expect(&DOWNLINK_DEVICE, sdcard1.input_buf[511]);
+  uart_check_free_space_ExpectAndReturn(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, sdcard1.input_buf[510]);
+  uart_check_free_space_ExpectAndReturn(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, 1, TRUE);
+  uart_put_byte_Expect(&SDLOGGER_SPI_DIRECT_DOWNLINK_DEVICE, sdcard1.input_buf[511]);
   /* Expect no more read block */
 
   /* Periodic loop */
