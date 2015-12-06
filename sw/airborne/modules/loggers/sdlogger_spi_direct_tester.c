@@ -47,6 +47,9 @@ struct RadioControl radio_control;
 /* Actually defined in pprzlog_transport.c */
 struct pprzlog_transport pprzlog_tp;
 
+/* Actually defined in pprz_transport.c */
+struct pprz_transport pprz_tp;
+
 /* Actually defined in uart.c */
 struct uart_periph uart1;
 
