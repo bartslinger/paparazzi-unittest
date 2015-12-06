@@ -16,6 +16,7 @@ void setUp(void) {
   /* Initialize the struct with wrong values to ensure correct initialization */
   myfilter.x[0] = 123;
   myfilter.x[1] = 123;
+  myfilter.i = 123;
 
   /* Set values to be used as in the matlab study */
   myfilter.A[0] = 13969;
@@ -31,6 +32,11 @@ void setUp(void) {
 
   myfilter.D[0] = 0;
 
+  for (int i = 0; i < SO_BUFFERSIZE; i++)
+  {
+    myfilter.buffer[i] = 123;
+  }
+
 }
 
 void tearDown(void) {
@@ -43,6 +49,11 @@ void testInitialize(void)
   second_order_delayed_filter_initialize(&myfilter);
   TEST_ASSERT_EQUAL(0, myfilter.x[0]);
   TEST_ASSERT_EQUAL(0, myfilter.x[1]);
+  TEST_ASSERT_EQUAL(0, myfilter.i);
+  for (int i = 0; i < SO_BUFFERSIZE; i++)
+  {
+    TEST_ASSERT_EQUAL(0, myfilter.buffer[i]);
+  }
 }
 
 /**
@@ -54,13 +65,31 @@ void testStepInputResponse(void)
   second_order_delayed_filter_initialize(&myfilter);
   int16_t sigout = 0;
 
-  int16_t inputs[10] = {0, 9600, 9600, 9600, 9600,
+  int16_t inputs[15] = {0, 0, 0, 0, 0,
+                        0, 9600, 9600, 9600, 9600,
                         9600, 9600, 9600, 9600, 9600};
-  int16_t outputs[10] ={0, 0, 27, 104, 223,
+  int16_t outputs[15] ={0, 0, 0, 0, 0,
+                        0, 0, 27, 104, 223,
                         377, 561, 769, 997, 1240};
-  for (int i = 0; i < 10; i++) {
-    sigout = second_order_delayed_filter_propagate(&myfilter, inputs[i]);
+  for (int i = 0; i < 15; i++) {
+    sigout = second_order_delayed_filter_propagate(&myfilter, inputs[i], 0);
     TEST_ASSERT_EQUAL(outputs[i], sigout);
   }
+}
 
+void testStepInputWithDelay(void)
+{
+  second_order_delayed_filter_initialize(&myfilter);
+  int16_t sigout = 0;
+
+  int16_t inputs[15] = {0, 9600, 9600, 9600, 9600,
+                        9600, 9600, 9600, 9600, 9600,
+                        9600, 9600, 9600, 9600, 9600};
+  int16_t outputs[15] ={0, 0, 0, 0, 0,
+                        0, 0, 27, 104, 223,
+                        377, 561, 769, 997, 1240};
+  for (int i = 0; i < 15; i++) {
+    sigout = second_order_delayed_filter_propagate(&myfilter, inputs[i], 5);
+    TEST_ASSERT_EQUAL(outputs[i], sigout);
+  }
 }
