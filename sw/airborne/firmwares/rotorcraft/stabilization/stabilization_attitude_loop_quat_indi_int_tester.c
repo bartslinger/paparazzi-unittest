@@ -14,11 +14,14 @@ struct Int32AttitudeGains stabilization_gains = {
 };
 
 struct Int32Quat att_err;
-struct Int32Rates *body_rate_state;
+struct Int32Rates actual_body_rate;
+struct Int32Rates *body_rate;
 
 void setUp(void) {
   /* Initialize the struct with wrong values to ensure correct initialization */
-  //body_rate->p = 100;
+  body_rate = &actual_body_rate;
+
+  stabilization_att_indi_cmd[COMMAND_ROLL] = 123;
 }
 
 void tearDown(void) {
@@ -28,11 +31,11 @@ void tearDown(void) {
 void testINDIpropagate(void)
 {
   /* Run stabilization */
-  TEST_ASSERT_EQUAL(100, body_rate_state->p);
-/*
+
   attitude_run_indi(stabilization_att_indi_cmd,
                     &stabilization_gains,
                     &att_err,
                     (*body_rate));
-  tryit();*/
+  TEST_ASSERT_EQUAL(354, stabilization_att_indi_cmd[COMMAND_ROLL]);
 }
+
