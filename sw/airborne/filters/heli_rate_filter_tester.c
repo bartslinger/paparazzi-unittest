@@ -47,9 +47,11 @@ void tearDown(void) {
 void testInitializeFilterWithOmegaAndDelay(void) {
   uint32_t omega = 20;
   uint8_t delay = 17;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
   TEST_ASSERT_EQUAL(20, heli_roll_filter.omega);
   TEST_ASSERT_EQUAL(17, heli_roll_filter.delay);
+  TEST_ASSERT_EQUAL(10000, heli_roll_filter.max_inc);
 }
 
 /**
@@ -62,12 +64,23 @@ void testInitializeFilterWithOmegaAndDelay(void) {
  *
  * First response is only (1-alpha)*9600, which is 360,9
  * Values used for comparison originate from matlab
+ *            0
+ *          360
+ *          707
+ *         1041
+ *         1362
+ *         1671
+ *         1969
+ *         2255
+ *         2531
+ *         2796
  */
 void testStepResponseScenario1(void) {
   /* Configure filter */
   uint32_t omega = 20;
   uint8_t delay = 0;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   /* Propagate */
   int32_t response;
@@ -91,7 +104,8 @@ void testStepResponseScenario2(void) {
   /* Configure filter */
   uint32_t omega = 60;
   uint8_t delay = 0;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   /* Propagate */
   int32_t response;
@@ -116,7 +130,8 @@ void testStepResponseScenario3(void){
   /* Configure filter */
   uint32_t omega = 20;
   uint8_t delay = 2;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   /* Propagate */
   int32_t response;
@@ -144,7 +159,8 @@ void testStepResponseBufferOverflow(void){
   /* Configure filter */
   uint32_t omega = 20;
   uint8_t delay = 2;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   /* Manipulate buffer index */
   heli_roll_filter.idx = HELI_RATE_FILTER_BUFFER_SIZE - 2;
@@ -177,7 +193,8 @@ void testMaximumDelayFirst(void)
   /* Configure filter */
   uint32_t omega = 20;
   uint8_t delay = HELI_RATE_FILTER_BUFFER_SIZE;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   TEST_ASSERT_EQUAL(HELI_RATE_FILTER_BUFFER_SIZE-1, heli_roll_filter.delay);
 }
@@ -192,7 +209,8 @@ void testMaximumDelayFar(void)
   /* Configure filter */
   uint32_t omega = 20;
   uint8_t delay = HELI_RATE_FILTER_BUFFER_SIZE + 5;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   TEST_ASSERT_EQUAL(HELI_RATE_FILTER_BUFFER_SIZE-1, heli_roll_filter.delay);
 }
@@ -207,7 +225,8 @@ void testChangeOmegaValue(void)
   /* Configure filter */
   uint32_t omega = 20;
   uint8_t delay = 0;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   /* Propagate with no input */
   int32_t response;
@@ -237,7 +256,8 @@ void testChangeDelayWithinRange(void)
   /* Configure filter */
   uint32_t omega = 20;
   uint8_t delay = 0;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   /* Propagate */
   int32_t response;
@@ -270,9 +290,82 @@ void testChangeDelayOutsideBufferRange(void)
   /* Configure filter */
   uint32_t omega = 20;
   uint8_t delay = 0;
-  heli_rate_filter_initialize(&heli_roll_filter, omega, delay);
+  uint16_t max_inc = 10000;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
 
   /* Set delay to number that is 1 too large */
   heli_rate_filter_set_delay(&heli_roll_filter, HELI_RATE_FILTER_BUFFER_SIZE);
   TEST_ASSERT_EQUAL(HELI_RATE_FILTER_BUFFER_SIZE-1, heli_roll_filter.delay);
+}
+
+/**
+ * @brief testMaximumIncreaseRate
+ * Because actuators are saturated, increase only by a maximum. Otherwise first
+ * order.
+ * Max rate in this test = 340. Third value (1015) is not saturated anymore.
+ *            0
+ *          340
+ *          680
+ *         1015
+ *         1337
+ *         1647
+ *         1946
+ *         2233
+ *         2509
+ *         2775
+ */
+void testMaximumIncreaseRate(void)
+{
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = 0;
+  uint16_t max_inc = 340;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
+
+  /* Propagate */
+  int32_t response;
+  int32_t input = MAX_PPRZ;
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(340, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(680, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1015, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(1337, response);
+}
+
+/**
+ * @brief testNegativeSlopeMaximumRate
+ * Same as previous test but with negative input and negative results
+ *            0
+ *         -340
+ *         -680
+ *        -1016
+ *        -1339
+ *        -1650
+ *        -1949
+ *        -2237
+ *        -2514
+ *        -2781
+ */
+void testNegativeSlopeMaximumRate(void)
+{
+  /* Configure filter */
+  uint32_t omega = 20;
+  uint8_t delay = 0;
+  uint16_t max_inc = 340;
+  heli_rate_filter_initialize(&heli_roll_filter, omega, delay, max_inc);
+
+  /* Propagate */
+  int32_t response;
+  int32_t input = -MAX_PPRZ;
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(-340, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(-680, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(-1016, response);
+  response = heli_rate_filter_propagate(&heli_roll_filter, input);
+  TEST_ASSERT_EQUAL(-1339, response);
 }
